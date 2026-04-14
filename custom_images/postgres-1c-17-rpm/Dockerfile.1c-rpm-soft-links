@@ -1,0 +1,55 @@
+FROM quay.io/centos/centos:stream9
+
+ARG PG_SERVER_VERSION
+ENV PG_SERVER_VERSION=${PG_SERVER_VERSION:-17}
+
+ARG PG_MAJOR
+ENV PG_MAJOR=${PG_MAJOR:-17}
+
+ARG PG_UNIX_SOCKET_DIR
+ENV PG_UNIX_SOCKET_DIR=${PG_UNIX_SOCKET_DIR:-"/var/run/postgresql"}
+
+ARG PG_SERVER_PORT
+ENV PG_SERVER_PORT=${PG_SERVER_PORT:-5432}
+
+ARG PGDATA
+ENV PGDATA=${PGDATA:-"/var/lib/postgresql/data"}
+
+EXPOSE ${PG_SERVER_PORT}
+
+# Prepare Postgres start script
+RUN echo "#!/bin/bash" > /pg_start.sh && chmod a+x /pg_start.sh \
+    && echo "chown -R postgres:postgres \${PGDATA} \${PG_UNIX_SOCKET_DIR}" \
+    >> /pg_start.sh \
+    && printf "sudo -Eu postgres /usr/pgsql-17/bin/postgres -D \${PGDATA} -k \${PG_UNIX_SOCKET_DIR}  -p \${PG_SERVER_PORT} >& /proc/1/fd/1 \n" \
+    >> /pg_start.sh \
+    # Infinite sleep to allow restarting Postgres
+    && echo "/bin/bash -c \"trap : TERM INT; sleep infinity & wait\"" \
+    >> /pg_start.sh
+
+# Copy postgresql-1c rpms
+COPY ./*rpm /tmp/rpms/
+
+# Install needed tools
+RUN dnf makecache && \ 
+    dnf install -y \
+        ca-certificates \
+        wget sudo
+
+# Install postgresql-1c and locales
+RUN dnf install -y /tmp/rpms/*.rpm && \
+    dnf install -y glibc-langpack-en glibc-langpack-ru && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm -rf /tmp/rpms
+
+# dblab 4.1.0 requires pg_isready in PATH or /usr/bin to do Healthcheck of instance
+RUN mkdir -p /usr/lib/postgresql/17 && \
+    ln -s /usr/pgsql-17/bin /usr/lib/postgresql/17/bin && \
+    mkdir -p /var/lib/postgresql/data && chown -R postgres:postgres /var/lib/postgresql && \
+    ln -sf /usr/pgsql-17/bin/pg_ctl /usr/bin/pg_ctl && \
+    ln -sf /usr/pgsql-17/bin/initdb /usr/bin/initdb && \
+    ln -sf /usr/pgsql-17/bin/pg_isready /usr/bin/pg_isready && \
+    ln -sf /usr/pgsql-17/bin/psql /usr/bin/psql && \
+    ln -sf /usr/pgsql-17/bin/pg_dump /usr/bin/pg_dump
+
+CMD ["/pg_start.sh"]

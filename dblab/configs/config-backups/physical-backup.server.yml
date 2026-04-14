@@ -1,0 +1,175 @@
+# Copy this configuration to: ~/.dblab/engine/configs/server.yml
+# Configuration reference guide: https://postgres.ai/docs/reference-guides/database-lab-engine-configuration-reference
+server:
+  verificationToken: "thunboo_token" # Primary auth token; can be empty (not recommended); for multi-user mode, use DBLab EE
+  port: 2345 # API server port; default: "2345"
+  disableConfigModification: false # When true, configuration changes via API/CLI/UI are disabled; default: "false"
+
+embeddedUI:
+  enabled: true # If enabled, a separate UI container will be started
+  dockerImage: "postgresai/ce-ui:latest" # Default: "postgresai/ce-ui:latest"
+  host: "0.0.0.0" # Default: "127.0.0.1" (accepts only local connections)
+  port: 2346 # UI port; default: "2346"
+
+global:
+  engine: postgres # Default: "postgres" (only Postgres is currently supported)
+  debug: true # When true, more detailed logs are written to the server log
+  database: # DB credentials used for management connections
+    username: postgres # DB user, default: "postgres" (user must exist)
+    dbname: postgres # DB name, default: "postgres" (DB must exist)
+
+poolManager: # Manages filesystem pools (ZFS) or volume groups (LVM)
+  mountDir: /var/lib/dblab # Pool mount directory; can contain multiple pools; default: "/var/lib/dblab"
+  dataSubDir: data  # The "golden copy" data directory location, relative to mountDir; must exist; default: "data"
+                    # Example: for "/var/lib/dblab/dblab_pool/data" set mountDir: "/var/lib/dblab" and dataSubDir: "data" (assuming mount point is "/var/lib/dblab/dblab_pool")
+  clonesMountSubDir: clones # Where clones are mounted, relative to mountDir; default: "clones"
+                            # Example: for "/var/lib/dblab/dblab_pool/clones" set mountDir: "/var/lib/dblab" and clonesMountSubDir: "clones" (assuming mount point is "/var/lib/dblab/dblab_pool"), resulting path for a clone running on port 6000: "/var/lib/dblab/dblab_pool/clones/6000"
+  socketSubDir: sockets # Where sockets are located, relative to mountDir; default: "sockets"
+  observerSubDir: observer # Where observability artifacts are located, relative to clone's data directory; default: "observer"
+  preSnapshotSuffix: "_pre" # Suffix for preliminary snapshots; default: "_pre"
+  selectedPool: "" # Force selection of working pool inside mountDir; default: "" (standard selection and rotation mechanism will be applied)
+
+databaseContainer: &db_container  # Docker config for all DB containers
+                                  # See https://postgres.ai/docs/database-lab/supported_databases
+                                  # DBLab SE and EE customers get images compatible with RDS, RDS Aurora, GCP CloudSQL, Heroku, Timescale Cloud, Supabase, PostGIS
+  dockerImage: "pg-1c-ru-centos-rpms:v2" #"pg-1c-ru-centos:v1" #"pg-1c-ru:v1" #"postgresai/extended-postgres:17" # Postgres image; major version (18) must match source if physical mode
+  containerConfig: # Custom container config; see https://docs.docker.com/engine/reference/run/#runtime-constraints-on-resources
+    "shm-size": 1gb # Shared memory size; increase if "could not resize shared memory segment" errors occur
+
+databaseConfigs: &db_configs # Postgres config for all DB containers
+  configs:
+    shared_buffers: 1GB # Postgres buffer pool size; large values can lead to OOM
+    shared_preload_libraries: "" # DISABLING EXTRA MODULES (Gleb.Broydo) "pg_stat_statements, pg_stat_kcache, auto_explain, logerrors" # Shared libraries; copy from source
+    # Config from infostart.ru/1c/articles/2102149/
+    lc_messages: "en_US.UTF-8"
+    lc_monetary: "ru_RU.UTF-8"
+    lc_numeric: "ru_RU.UTF-8"
+    lc_time: "ru_RU.UTF-8"
+    max_connections: 100
+    default_text_search_config: 'pg_catalog.russian'
+    maintenance_work_mem: "500MB" # Maximum memory for maintenance operations (VACUUM, CREATE INDEX, etc.)
+    work_mem: "100MB" # This and Query Planning parameters should be copied from source; see https://postgres.ai/docs/how-to-guides/administration/postgresql-configuration#postgresql-configuration-in-clones
+    # ... put Query Planning parameters here
+
+provision: # Defines how data is provisioned
+  <<: *db_container
+  portPool: # Range of ports for Postgres clones; ports will be allocated sequentially, starting from the lowest value
+    from: 6000 # First port in the range
+    to: 6099 # Last port in the range
+  useSudo: false # Use sudo for ZFS/LVM and Docker commands if DBLab server running outside a container (not recommended)
+  keepUserPasswords: false # Keep user passwords in clones; default: "false"
+  cloneAccessAddresses: "0.0.0.0" # IP addresses that can be used to access clones; supports multiple IPs and IPv6; default: "127.0.0.1" (loop-back)
+
+retrieval:  # Data retrieval: initial sync and ongoing updates. Two methods:
+            #   - logical: dump/restore (works with RDS, different physical layout)
+            #   - physical: direct copy (identical layout, not for RDS) e.g. using pg_basebackup, WAL-G, or pgBackRest
+  jobs: # Jobs to run; must not contain physical and logical restore jobs simultaneously
+    - physicalRestore
+    - physicalSnapshot
+  spec:
+    physicalRestore: # Restores data directory from a physical copy
+      options:
+        # Adding custom image (Gleb.Broydo)
+        dockerImage: "pg-dblab-ru:v1"
+        <<: *db_container
+        tool: customTool # Defines the tool to restore data
+        sync: # Additional "sync" container is used to keep the data directory in a synchronized state with the source (in fact, "sync" container is an asyncrhonous replica)
+          enabled: true # Enable running of sync container
+          healthCheck:
+            interval: 5 # Health check frequency (seconds)
+            maxRetries: 200 # Max retries before giving up
+          configs: # Additional Postgres configuration for sync container
+            shared_buffers: 2GB # Bigger buffer pool helps avoid lagging behind the source
+            # 2 params from 1C config
+            max_connections: 100
+            max_locks_per_transaction: 256
+          recovery: # Legacy recovery.conf options; only for Postgres 11 or older
+            # standby_mode: on
+            # recovery_target_timeline: 'latest'
+        envs: # Environment vars; can be used, for example, to defined connection to source DB. See https://www.postgresql.org/docs/current/libpq-envars.html
+          PGUSER: "postgres"
+          PGPASSWORD: "postgres"
+          PGHOST: "100.122.59.96"
+          PGPORT: 5432
+        customTool:
+          # infostart.ru command
+          command: "pg_basebackup  -P -R --slot=dev_replica -X stream -D /var/lib/dblab/dblab_pool/data" 
+          # My command
+          # command: "pg_basebackup -X stream --checkpoint=fast -D /var/lib/dblab/dblab_pool/data" # For pg_basebackup, DB connection is specified in envs. Do not change option -D. Command chains are not supported here; if need more complex logic, use a script and mount it (-v) to dblab_server container. 
+          restore_command: "" # Standard Postgres option defining how WALs are restored (e.g. from backups)
+    physicalSnapshot:
+      options:
+        skipStartSnapshot: false # Skip taking a snapshot when retrieval starts; default: "false"
+        <<: *db_configs # Additional Postgres configuration for containers participating in physicalSnapshot (promotion, snapshot)
+        promotion:
+          <<: *db_container
+          enabled: true # Enable Postgres promotion to read-write mode before finalizing snapshot
+          dockerImage: "pg-dblab-ru:v1"
+          healthCheck:
+            interval: 5 # Health check interval in seconds
+            maxRetries: 200 # Maximum retry attempts before failing
+          queryPreprocessing: # Data transformation using SQL before promoting to read-write mode
+            queryPath: "" # Directory path containing SQL query files; example: "/tmp/scripts/sql"; default: "" (disabled)
+            maxParallelWorkers: 2 # Maximum number of concurrent workers for query preprocessing
+            inline: "" # Direct SQL queries to execute after scripts from 'queryPath'. Supports multiple statements separated by semicolons
+          configs: # Postgres configuration overrides for promotion container
+            shared_buffers: 2GB
+          recovery: # Legacy recovery.conf configuration options; only applicable for Postgres 11 or earlier versions
+            # recovery_target: 'immediate'
+            # recovery_target_action: 'promote'
+            # recovery_target_timeline: 'latest'
+        preprocessingScript: "" # Shell script path to execute before finalizing snapshot; example: "/tmp/scripts/custom.sh"; default: "" (disabled)
+        scheduler: # Snapshot scheduling and retention policy configuration
+          snapshot: # Snapshot creation scheduling
+            timetable: "0 */6 * * *" # Cron expression defining snapshot schedule: https://en.wikipedia.org/wiki/Cron#Overview
+          retention: # Snapshot retention policy
+            timetable: "0 * * * *" # Cron expression defining retention check schedule: https://en.wikipedia.org/wiki/Cron#Overview
+            limit: 4 # Maximum number of snapshots to retain
+        envs: # Environment variables to pass to promotion container
+
+cloning:
+  accessHost: "localhost" # Host that will be specified in database connection info for all clones (only used to inform users)
+  maxIdleMinutes: 120 # Automatically delete clones after the specified minutes of inactivity; 0 - disable automatic deletion
+
+diagnostic:
+  logsRetentionDays: 7 # How many days to keep logs
+
+observer: # CI Observer configuration
+#  replacementRules:  # Regexp rules for masking personal data in Postgres logs; applied before sending the logs to the Platform
+#                     # Check the syntax of regular expressions: https://github.com/google/re2/wiki/Syntax
+#    "regexp": "replace"
+#    "select \\d+": "***"
+#    "[a-z0-9._%+\\-]+(@[a-z0-9.\\-]+\\.[a-z]{2,4})": "***$1"
+
+webhooks: # Webhooks can be used to trigger actions in external systems upon events such as clone creation
+#  hooks:
+#    - url: ""
+#      secret: "" # (optional) Sent with the request in the `DBLab-Webhook-Token` HTTP header.
+#      trigger:
+#        - clone_create
+#        - clone_reset
+
+platform:
+  url: "https://postgres.ai/api/general" # Default: "https://postgres.ai/api/general"
+  enableTelemetry: true
+
+#  ╔══════════════════════════════════════════════════════════════════════════╗
+#  ║                     POSTGRES AI PLATFORM INTEGRATION                     ║
+#  ╠══════════════════════════════════════════════════════════════════════════╣
+#  ║                                                                          ║
+#  ║  - Production-ready UI, AI assistance and support from human experts     ║
+#  ║  - Enterprise-grade user management & role-based access control          ║
+#  ║  - Advanced security: audit trails, SIEM integration, compliance         ║
+#  ║  - Real-time performance monitoring & intelligent recommendations        ║
+#  ║                                                                          ║
+#  ║  Learn more at https://postgres.ai/                                      ║
+#  ║                                                                          ║
+#  ╚══════════════════════════════════════════════════════════════════════════╝
+#
+# Uncomment the following lines if you need the Platform integration
+#
+#  projectName: "project_name" # Project name
+#  orgKey: "org_key" # Organization key
+#  accessToken: "platform_access_token" # Token for authorization in Platform API; get it at https://postgres.ai/console/YOUR_ORG_NAME/tokens
+#  enablePersonalTokens: true # Enable authorization with personal tokens of the organization's members.
+#

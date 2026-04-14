@@ -1,0 +1,55 @@
+ARG PG_SERVER_VERSION=17
+
+# Build the extended image
+FROM postgres:${PG_SERVER_VERSION}-bullseye
+LABEL maintainer="postgres.ai"
+
+ARG PG_SERVER_VERSION
+ENV PG_SERVER_VERSION=${PG_SERVER_VERSION:-17}
+
+ARG PG_UNIX_SOCKET_DIR
+ENV PG_UNIX_SOCKET_DIR=${PG_UNIX_SOCKET_DIR:-"/var/run/postgresql"}
+
+ARG PG_SERVER_PORT
+ENV PG_SERVER_PORT=${PG_SERVER_PORT:-5432}
+
+# Required in dblab:4.1.0
+ARG PG_MAJOR
+ENV PG_MAJOR=${PG_MAJOR:-17}
+
+RUN apt-get clean && rm -rf /var/lib/apt/lists/partial \
+    # remove the "beta" and "rc" suffix in the PG_SERVER_VERSION variable (if exists)
+    && PG_SERVER_VERSION="$( echo ${PG_SERVER_VERSION} | sed 's/beta.*//' | sed 's/rc.*//' )" \
+    && apt-get update -o Acquire::CompressionTypes::Order::=gz \
+    && apt-get install --no-install-recommends -y wget make gcc unzip sudo git \
+    curl libc6-dev apt-transport-https ca-certificates pgxnclient bc \
+    build-essential libssl-dev krb5-multidev libkrb5-dev lsb-release apt-utils \
+    && apt-get install --no-install-recommends -y postgresql-server-dev-${PG_SERVER_VERSION} \
+    # plpython3 (procedural language implementation for Python 3.x)
+    && apt-get install --no-install-recommends -y postgresql-plpython3-${PG_SERVER_VERSION} \
+    # remove all auxilary packages to reduce final image size
+    && cd / && rm -rf /tmp/* && apt-get purge -y --auto-remove \
+    gcc make wget unzip curl libc6-dev apt-transport-https git \
+    postgresql-server-dev-${PG_SERVER_VERSION} pgxnclient build-essential \
+    libssl-dev krb5-multidev comerr-dev krb5-multidev libkrb5-dev apt-utils lsb-release \
+    libgssrpc4 libevent-dev libbrotli-dev \
+    && apt-get clean -y autoclean \
+    && rm -rf /var/lib/apt/lists/* \
+    # remove standard pgdata
+    && rm -rf /var/lib/postgresql/${PG_SERVER_VERSION}/ \
+    # add ru locale
+    && /bin/sed -i 's/# ru_RU.UTF-8/ru_RU.UTF-8/g; s/# en_US.UTF-8/en_US.UTF-8/g' /etc/locale.gen && /usr/sbin/locale-gen && /bin/echo "LANG=en_US.UTF-8" >> /etc/default/locale
+
+EXPOSE ${PG_SERVER_PORT}
+
+# Prepare Postgres start script
+RUN echo "#!/bin/bash" > /pg_start.sh && chmod a+x /pg_start.sh \
+    && echo "chown -R postgres:postgres \${PGDATA} \${PG_UNIX_SOCKET_DIR}" \
+    >> /pg_start.sh \
+    && printf "sudo -Eu postgres /usr/lib/postgresql/$(echo ${PG_SERVER_VERSION} | sed 's/beta.*//' | sed 's/rc.*//')/bin/postgres -D \${PGDATA} -k \${PG_UNIX_SOCKET_DIR}  -p \${PG_SERVER_PORT} >& /proc/1/fd/1 \n" \
+    >> /pg_start.sh \
+    # Infinite sleep to allow restarting Postgres
+    && echo "/bin/bash -c \"trap : TERM INT; sleep infinity & wait\"" \
+    >> /pg_start.sh
+
+CMD ["/pg_start.sh"]
