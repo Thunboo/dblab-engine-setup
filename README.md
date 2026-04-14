@@ -120,3 +120,10 @@ sudo docker run \
   sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT
   sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT
   ```
+
+## 6. GitLab CI
+
+В папке `dblab-cli` подготовлены файлы для использования DBLab в GitLab CI:
+
+- `dblab-cli/Dockerfile` — Docker-образ контейнера для пайплайнов с установленным `dblab` CLI. Его надо собрать на сервере с раннером. Раннер с соответствуюзим docker-executor - надо зарегистрировать на проект в GitLab.
+- `dblab-cli/gitlab-ci.yml` — пример GitLab CI пайплайна с созданием клона и проверкой подключения через `psql`.

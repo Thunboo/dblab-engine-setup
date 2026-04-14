@@ -1,0 +1,44 @@
+default:
+  image:
+    name: dblab-cli:latest
+    # pull_policy: if-not-present
+
+variables:
+  USERNAME: "test"
+  PASSWORD: "y&UG6CxqRGbs4t18"
+  CLONE_ID: "$CI_COMMIT_SHORT_SHA-$CI_JOB_ID"
+  ENV_ID: "$CI_COMMIT_SHORT_SHA"
+  URL: http://dblab2.tail8cb8b9.ts.net
+  TOKEN: thunboo_token
+  PG_HOST: dblab2.tail8cb8b9.ts.net
+  PG_PORT: -1
+
+stages:
+  - clonning
+  - psql
+
+clonning-job:
+  stage: clonning
+  script:
+    - dblab init --environment-id=$ENV_ID --url=$URL --token=$TOKEN
+    - dblab instance status
+    - dblab clone create --username $USERNAME --password $PASSWORD --id $CLONE_ID  | tee clone_output.txt
+    - CONNSTRING="$(grep 'Connection string:' clone_output.txt | sed 's/^Connection string:[[:space:]]*//')"
+    - PG_PORT="$(echo "$CONNSTRING" | sed -n 's/.*port=\([0-9]*\).*/\1/p')"
+    - echo "PG_PORT=$PG_PORT" >> clone.env
+    - PG_USER="$(echo "$CONNSTRING" | sed -n 's/.*user=\([^ ]*\).*/\1/p')"
+    - echo "PG_USER=$PG_USER" >> clone.env
+    - PG_DBNAME="$(echo "$CONNSTRING" | sed -n 's/.*dbname=\([^ ]*\).*/\1/p')"
+    - echo "PG_DBNAME=$PG_DBNAME" >> clone.env
+    - cat clone.env
+  artifacts:
+    reports:
+      dotenv: clone.env
+
+psql-test-job:
+  stage: psql
+  image: postgres:17
+  script:
+    - export PGPASSWORD="$PASSWORD"
+    - psql -h $PG_HOST -p $PG_PORT -U $PG_USER -d $PG_DBNAME -c "\l"
+    - psql -h $PG_HOST -p $PG_PORT -U $PG_USER -d $PG_DBNAME -c "select * from pg_available_extensions where name = 'mchar';"
