@@ -1,126 +1,121 @@
-# Copy this configuration to: ~/.dblab/engine/configs/server.yml
-# Configuration reference guide: https://postgres.ai/docs/reference-guides/database-lab-engine-configuration-reference
 server:
-  verificationToken: "thunboo_token"
-  port: 2345
-  disableConfigModification: false
+  verificationToken: "secret_token" 
+  port: 2345 
+  disableConfigModification: false 
 
 embeddedUI:
-  enabled: true
-  dockerImage: "postgresai/ce-ui:latest"
-  host: "0.0.0.0"
-  port: 2346
+  enabled: true 
+  dockerImage: "postgresai/ce-ui:latest" 
+  host: "0.0.0.0" 
+  port: 80 
 
 global:
-  engine: postgres
-  debug: true
-  database:
-    username: postgres
-    dbname: postgres
+  engine: postgres 
+  debug: true 
+  database: 
+    username: postgres 
+    dbname: postgres 
 
-poolManager:
-  mountDir: /var/lib/dblab
-  dataSubDir: data
-  clonesMountSubDir: clones
-  socketSubDir: sockets
-  observerSubDir: observer
-  preSnapshotSuffix: "_pre"
-  selectedPool: ""
+poolManager: 
+  mountDir: /var/lib/dblab 
+  dataSubDir: data  
+  clonesMountSubDir: clones 
+  socketSubDir: sockets 
+  observerSubDir: observer 
+  preSnapshotSuffix: "_pre" 
+  selectedPool: "" 
 
-databaseContainer: &db_container
-  dockerImage: "pg-1c-ru-centos-rpms:v2"
-  containerConfig:
-    "shm-size": 1gb
+databaseContainer: &db_container  
+  dockerImage: "pg-1c-ru-centos-rpms:v2" 
+  containerConfig: 
+    "shm-size": 1gb 
 
 databaseConfigs: &db_configs
   configs:
-    shared_buffers: 1GB
+    shared_buffers: "1GB"
     shared_preload_libraries: ""
     lc_messages: "en_US.UTF-8"
     lc_monetary: "ru_RU.UTF-8"
     lc_numeric: "ru_RU.UTF-8"
     lc_time: "ru_RU.UTF-8"
     max_connections: 100
-    default_text_search_config: 'pg_catalog.russian'
+    default_text_search_config: "pg_catalog.russian"
     maintenance_work_mem: "500MB"
     work_mem: "100MB"
 
-provision:
+provision: 
   <<: *db_container
-  portPool:
-    from: 6000
-    to: 6099
-  useSudo: false
-  keepUserPasswords: false
-  cloneAccessAddresses: "0.0.0.0"
+  portPool: 
+    from: 6000 
+    to: 6099 
+  useSudo: false 
+  keepUserPasswords: false 
+  cloneAccessAddresses: "0.0.0.0" 
 
-retrieval:
-  jobs:
+retrieval:  
+  jobs: 
     - physicalRestore
     - physicalSnapshot
   spec:
-    physicalRestore:
+    physicalRestore: 
       options:
-        dockerImage: "pg-dblab-ru:v1"
         <<: *db_container
-        tool: customTool
-        sync:
-          enabled: true
+        tool: customTool 
+        sync: 
+          enabled: true 
           healthCheck:
-            interval: 5
-            maxRetries: 200
-          configs:
-            shared_buffers: 2GB
-            max_connections: 100
-            max_locks_per_transaction: 256
-          recovery:
+            interval: 5 
+            maxRetries: 200 
+          configs: 
+            shared_buffers: 2GB 
+          recovery: 
         envs:
           PGUSER: "postgres"
           PGPASSWORD: "postgres"
-          PGHOST: "100.122.59.96"
-          PGPORT: 5432
+          PGHOST: "100.125.59.64"
+          PGPORT: 5556
         customTool:
-          command: "pg_basebackup  -P -R --slot=dev_replica -X stream -D /var/lib/dblab/dblab_pool/data"
-          restore_command: ""
+          command: "pg_basebackup -P -R --no-slot -X stream -D /var/lib/dblab/dblab_pool/data" 
+          restore_command: "" 
     physicalSnapshot:
       options:
-        skipStartSnapshot: false
-        <<: *db_configs
+        skipStartSnapshot: false 
+        <<: *db_configs 
         promotion:
           <<: *db_container
-          enabled: true
-          dockerImage: "pg-dblab-ru:v1"
+          enabled: true 
           healthCheck:
-            interval: 5
-            maxRetries: 200
-          queryPreprocessing:
-            queryPath: ""
-            maxParallelWorkers: 2
-            inline: ""
-          configs:
+            interval: 5 
+            maxRetries: 200 
+          queryPreprocessing: 
+            queryPath: "" 
+            maxParallelWorkers: 2 
+            inline: "" 
+          configs: 
             shared_buffers: 2GB
-          recovery:
-        preprocessingScript: ""
-        scheduler:
-          snapshot:
-            timetable: "0 */6 * * *"
-          retention:
-            timetable: "0 * * * *"
-            limit: 4
-        envs:
+          recovery: 
+        preprocessingScript: "" 
+        databaseRename: 
+        scheduler: 
+          snapshot: 
+            timetable: "0 */6 * * *" 
+          retention: 
+            timetable: "0 * * * *" 
+            limit: 4 
+        envs: 
 
 cloning:
-  accessHost: "localhost"
-  maxIdleMinutes: 120
+  accessHost: "localhost" 
+  maxIdleMinutes: 120 
+  protectionLeaseDurationMinutes: 1440 
+  protectionMaxDurationMinutes: 10080 
+  protectionExpiryWarningMinutes: 1440 
 
 diagnostic:
-  logsRetentionDays: 7
+  logsRetentionDays: 7 
 
-observer:
-
-webhooks:
-
+observer: 
+webhooks: 
 platform:
-  url: "https://postgres.ai/api/general"
-  enableTelemetry: true
-
+  url: "https://postgres.ai/api/general" 
+  enableTelemetry: false
